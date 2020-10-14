@@ -1,0 +1,5 @@
+[package]
+name = "pg_client"
+version = "0.0.0"
+authors = ["wuaoxiang <pylint@yandex.com>"]
+edition = "2018"
