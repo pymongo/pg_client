@@ -31,4 +31,3 @@ fn calc_len_by_byte_shift(bencher: &mut test::Bencher) {
         assert_eq!(resp_msg_len, 8);
     });
 }
-

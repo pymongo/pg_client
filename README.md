@@ -3,8 +3,8 @@ A postgres client without any third-party dependencies/libraries.
 ## Roadmap
 
 - [x] Send `StartupMessage` request
-- [ ] Parse `StartupMessage` response
-- [ ] Send Authentication*? request
+- [x] Parse `StartupMessage` response
+- [ ] Send `SimpleQuery`(SELECT 1::char;)  request
 - [ ] Async support
 
 ## what I learn from this project
