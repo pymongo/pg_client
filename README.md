@@ -7,6 +7,12 @@ A postgres client without any third-party dependencies/libraries.
 - [ ] Send `SimpleQuery`(SELECT 1::char;)  request
 - [ ] Async support
 
+## postgres protocol message
+
+### client startup
+
+### server 
+
 ## what I learn from this project
 
 - little/bigger/naive endian, compile-time env CARGO_CFG_TARGET_ENDIAN

@@ -15,6 +15,8 @@ enum MessageType {
     SimpleQuery = b'Q',
     Authentication = b'R',
     ParameterStatus = b'S',
+    /// client SimpleQuery request success, server response a RowDescription first
+    RowDescription = b'T',
     ReadyForQuery = b'Z'
 }
 
@@ -68,13 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // StartupMessage { user: postgres, database: postgres }
     let mut startup_msg_body: Vec<u8> = Vec::new();
     startup_msg_body.extend(&PG_PROTOCOL_VERSION_3.to_be_bytes());
-    // pg通信中字符串实际上是std::ffi::CStr类型
-    startup_msg_body.extend(b"user");
-    // with nul terminator
-    startup_msg_body.push(0u8);
-    startup_msg_body
-        .extend(std::ffi::CStr::from_bytes_with_nul(b"postgres\0")?.to_bytes_with_nul());
-    // terminator of start_up_msg_body
+    // pg通信中字符串实际上是std::ffi::CStr类型，需要结尾有\0作为nul terminator
+    startup_msg_body.extend(b"user\0");
+    // CStr::from_bytes_with_nul(b"postgres\0")?.to_bytes_with_nul()
+    startup_msg_body.extend(b"postgres\0");
+    // terminator of startup_msg_body
     startup_msg_body.push(0u8);
     let body_len = startup_msg_body.len() as u32 + 4u32;
 
@@ -82,11 +82,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     startup_msg.extend(&body_len.to_be_bytes());
     startup_msg.append(&mut startup_msg_body);
 
-    // let mut cursor = std::io::Cursor::new(vec![0u8; 10]);
-    // cursor.fill_buf();
     let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{}", PG_DEFAULT_PORT))?;
+    /* TODO
+    1. 怎么知道server发送的消息已经发完了?
+    2. 怎么获取kernel/网卡上TCP的buffer?
+    3. 为什么TcpStream里面的flush方法是空白的?
+    4. BufReader默认缓冲区是8k，如果超过8k会怎样?
+    5. 如果从缓冲区中读取到消息不完整的话，会将已读数据重新放回缓存区吗?
+    */
+    // let mut cursor = std::io::Cursor::new(vec![0u8; 10]);
     let mut reader = std::io::BufReader::new(&mut stream);
     reader.get_mut().write(startup_msg.as_slice())?;
+    drop(startup_msg);
     let mut startup_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
 
     // AUTH resp
@@ -108,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resp_len = startup_resp.read_a_i32();
     assert_eq!(resp_len, 12);
     let pg_server_process_id = startup_resp.read_a_i32();
+    // secret_key = -1619159205为什么是负数，pg文档的Int32是i32还是u32
     let secret_key = startup_resp.read_a_i32();
     dbg!(pg_server_process_id, secret_key);
 
@@ -118,10 +126,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(startup_resp.read_a_u8(), PgSessionStatus::Idle as u8);
 
     // https://thepacketgeek.com/rust/tcpstream/reading-and-writing/
-    // Mark the bytes read as consumed so the buffer will not return them in a subsequent/next read
+    // Mark as consumed so the buffer will not return them in next read and allow next tcp data cover this data
     // fill_buf一定要搭配consume使用，读完本次TcpStream的数据后，将cursor前移，标记这块已读过的数组区域为空闲空间，下次从stream中读取数据时可以覆盖掉这片区域
-    // 消息不完整的话，要将已读放回缓存区区
     reader.consume(startup_resp.data.len());
+    drop(startup_resp);
 
     let mut query_body: Vec<u8> = Vec::new();
     // pg通信中字符串实际上是std::ffi::CStr类型
@@ -133,8 +141,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     query_msg.extend(&body_len.to_be_bytes());
     query_msg.append(&mut query_body);
     reader.get_mut().write(query_msg.as_slice())?;
+    drop(query_msg);
     let resp = reader.fill_buf()?.to_vec();
     println!("{:?}", resp);
+    let mut query_resp = PgRespParser::new(resp);
+    assert_eq!(query_resp.read_a_u8(), MessageType::RowDescription as u8);
     Ok(())
 }
 
