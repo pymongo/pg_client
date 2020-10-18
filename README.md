@@ -4,7 +4,8 @@ A postgres client without any third-party dependencies/libraries.
 
 - [x] Send `StartupMessage` request
 - [x] Parse `StartupMessage` response
-- [ ] Send `SimpleQuery`(SELECT 1::char;)  request
+- [x] Send `SimpleQuery`(SELECT 1::char;) request
+- [x] Parse `SimpleQuery`(SELECT 1::char;) response
 - [ ] Async support
 
 ## postgres protocol message

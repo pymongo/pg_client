@@ -14,5 +14,5 @@ fn main() {
     v.push(3);
     v.push(4);
 
-    let i = read_be_i32(&mut v.as_slice());
+    let _i = read_be_i32(&mut v.as_slice());
 }

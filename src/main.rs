@@ -60,6 +60,8 @@ Multi ParameterStatus {
 ```
 */
 #![allow(dead_code)]
+mod message;
+use message::{Message, MessageType};
 
 use std::io::{BufRead, Write};
 
@@ -68,19 +70,8 @@ const PG_PROTOCOL_VERSION_3: i32 = 0x00_03_00_00; // 196608
 const AUTHENTICATION_OK: i32 = 0i32;
 
 #[repr(u8)]
-enum MessageType {
-    BackendKeyData = b'K',
-    SimpleQuery = b'Q',
-    Authentication = b'R',
-    ParameterStatus = b'S',
-    /// client SimpleQuery request success, server response a RowDescription first
-    RowDescription = b'T',
-    ReadyForQuery = b'Z'
-}
-
-#[repr(u8)]
 enum PgSessionStatus {
-    Idle = b'I',
+    Idle = b'I', // 73
     DoingTransaction = b'T',
     ErrorInTransaction = b'E'
 }
@@ -90,6 +81,7 @@ struct PgRespParser {
     data: Vec<u8>,
 }
 
+/// TODO check cursor index out of range
 impl PgRespParser {
     fn new(data: Vec<u8>) -> Self {
         PgRespParser { cursor: 0, data }
@@ -118,6 +110,15 @@ impl PgRespParser {
         }
         unreachable!()
     }
+
+    /// assert self.cursor's next byte is a new message
+    fn read_a_message(&mut self) -> Message {
+        let msg_type  = MessageType::from(self.read_a_u8());
+        let body_len = (self.read_a_i32()-4) as usize;
+        let body = self.data[self.cursor..self.cursor+body_len].to_vec();
+        self.cursor += body_len;
+        Message::new(msg_type, body)
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -125,12 +126,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut startup_msg_body: Vec<u8> = Vec::new();
     startup_msg_body.extend(&PG_PROTOCOL_VERSION_3.to_be_bytes());
     // pg通信中字符串实际上是std::ffi::CStr类型，需要结尾有\0作为nul terminator
-    // CStr::from_bytes_with_nul(b"user\0")?.to_bytes_with_nul()
     startup_msg_body.extend(b"user\0");
     startup_msg_body.extend(b"postgres\0");
     // terminator of startup_msg_body, only startup_message has terminator and without first byte message type(historical reason)
     startup_msg_body.push(0u8);
-    let body_len = startup_msg_body.len() as u32 + 4u32;
+    let body_len = startup_msg_body.len() as i32 + 4;
 
     let mut startup_msg: Vec<u8> = Vec::new();
     startup_msg.extend(&body_len.to_be_bytes());
@@ -150,12 +150,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(startup_msg);
     let mut startup_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
 
-    // AUTH resp
-    assert_eq!(startup_resp.read_a_u8(), MessageType::Authentication as u8);
-    let resp_len = startup_resp.read_a_i32();
-    assert_eq!(resp_len, 8);
-    let auth_res = startup_resp.read_a_i32();
-    assert_eq!(auth_res, AUTHENTICATION_OK);
+    let auth_msg = startup_resp.read_a_message();
+    assert_eq!(auth_msg.msg_type, MessageType::Authentication);
+    assert_eq!(auth_msg.body.len(), 4);
+    assert_eq!(auth_msg.body.iter().sum::<u8>() as i32, AUTHENTICATION_OK);
 
     // PARAMETER_STATUS resp
     while startup_resp.read_a_u8() == MessageType::ParameterStatus as u8 {
@@ -173,11 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secret_key = startup_resp.read_a_i32();
     dbg!(pg_server_process_id, secret_key);
 
-    // ReadyForQuery resp
-    assert_eq!(startup_resp.read_a_u8(), MessageType::ReadyForQuery as u8);
-    let resp_len = startup_resp.read_a_i32();
-    assert_eq!(resp_len, 5);
-    assert_eq!(startup_resp.read_a_u8(), PgSessionStatus::Idle as u8);
+    let ready_for_query_msg = startup_resp.read_a_message();
+    assert_eq!(ready_for_query_msg.msg_type, MessageType::ReadyForQuery);
+    assert_eq!(ready_for_query_msg.body.len(), 1);
+    assert_eq!(ready_for_query_msg.body[0], PgSessionStatus::Idle as u8);
 
     // https://thepacketgeek.com/rust/tcpstream/reading-and-writing/
     // Mark as consumed so the buffer will not return them in next read and allow next tcp data cover this data
@@ -185,20 +182,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     reader.consume(startup_resp.data.len());
     drop(startup_resp);
 
-    let mut query_body: Vec<u8> = Vec::new();
-    // pg通信中字符串实际上是std::ffi::CStr类型
-    query_body.extend(b"SELECT 1::char;");
-    query_body.push(0u8);
-
-    let mut query_msg: Vec<u8> = vec![MessageType::SimpleQuery as u8];
-    let body_len = query_body.len() as u32 + 4u32;
-    query_msg.extend(&body_len.to_be_bytes());
-    query_msg.append(&mut query_body);
-    reader.get_mut().write(query_msg.as_slice())?;
+    let query_msg = Message::new(MessageType::SimpleQuery, b"SELECT 1::char;\0".to_vec());
+    reader.get_mut().write(&query_msg.to_vec_u8())?;
     drop(query_msg);
-    let resp = reader.fill_buf()?.to_vec();
-    println!("{:?}", resp);
-    let mut query_resp = PgRespParser::new(resp);
-    assert_eq!(query_resp.read_a_u8(), MessageType::RowDescription as u8);
+    let mut query_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
+
+    let row_description_msg = query_resp.read_a_message();
+    dbg!(row_description_msg);
+
+    /*
+    body: 0, 1, 0, 0, 0, 1, 49
+    i16(0,1): the number of column
+    i32(0,0,0,1): the length of the column value
+    [u8](49): the value of column, 49 is `1` in ASCII
+    */
+    let data_row_msg = query_resp.read_a_message();
+    dbg!(data_row_msg);
+
+
+    // CStr(83,69,76,69,67,84,32,49,0): "SELECT 1\0"
+    let command_complete_msg = query_resp.read_a_message();
+    dbg!(command_complete_msg);
+
+    let ready_for_query_msg = query_resp.read_a_message();
+    dbg!(&ready_for_query_msg);
+    assert_eq!(ready_for_query_msg.msg_type, MessageType::ReadyForQuery);
+    assert_eq!(ready_for_query_msg.body.len(), 1);
+    assert_eq!(ready_for_query_msg.body[0], PgSessionStatus::Idle as u8);
     Ok(())
 }

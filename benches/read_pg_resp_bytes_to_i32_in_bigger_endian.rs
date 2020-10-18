@@ -27,7 +27,7 @@ fn calc_len_by_byte_shift(bencher: &mut test::Bencher) {
         resp_msg_len += (PG_STARTUP_MSG_AUTHENTICATION_OK_RESP[1] as i32) << (3 * 8);
         resp_msg_len += (PG_STARTUP_MSG_AUTHENTICATION_OK_RESP[2] as i32) << (2 * 8);
         resp_msg_len += (PG_STARTUP_MSG_AUTHENTICATION_OK_RESP[3] as i32) << (1 * 8);
-        resp_msg_len += (PG_STARTUP_MSG_AUTHENTICATION_OK_RESP[4] as i32);
+        resp_msg_len += PG_STARTUP_MSG_AUTHENTICATION_OK_RESP[4] as i32;
         assert_eq!(resp_msg_len, 8);
     });
 }
