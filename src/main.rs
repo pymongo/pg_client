@@ -1,14 +1,72 @@
-#![feature(cstring_from_vec_with_nul)]
+/*!
+## Notes:
+
+1. ParameterStatusMessage, StartupMessage里所有字符串key-value pair的内存布局都是两个CStr挨着组成key-value
+
+例如: 83, 0, 0, 0, 25, 99, 108, 105, 101, 110, 116, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0
+
+表示: "client_encoding": "UTF8"
+
+## Message Example
+
+### client request StartupMessage
+
+```
+let mut startup_msg_body: Vec<u8> = Vec::new();
+startup_msg_body.extend(&0x00_03_00_00.to_be_bytes());
+startup_msg_body.extend(b"user\0");
+startup_msg_body.extend(b"postgres\0");
+// terminator of startup_msg_body, only startup_message has terminator and without first byte message type(historical reason)
+startup_msg_body.push(0u8);
+let body_len = startup_msg_body.len() as u32 + 4u32;
+let mut startup_msg: Vec<u8> = Vec::new();
+startup_msg.extend(&body_len.to_be_bytes());
+startup_msg.append(&mut startup_msg_body);
+```
+
+### server response StartupMessage
+
+```text
+82, 0, 0, 0, 8, 0, 0, 0, 0 ReadyForQuery { pg_session_status: i32 }
+
+Multi ParameterStatus { key: CStr, value: CStr }
+83, 0, 0, 0, 22, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 95, 110, 97, 109, 101, 0, 0
+83, 0, 0, 0, 25, 99, 108, 105, 101, 110, 116, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0
+83, 0, 0, 0, 23, 68, 97, 116, 101, 83, 116, 121, 108, 101, 0, 73, 83, 79, 44, 32, 77, 68, 89, 0
+83, 0, 0, 0, 25, 105, 110, 116, 101, 103, 101, 114, 95, 100, 97, 116, 101, 116, 105, 109, 101, 115, 0, 111, 110, 0
+83, 0, 0, 0, 27, 73, 110, 116, 101, 114, 118, 97, 108, 83, 116, 121, 108, 101, 0, 112, 111, 115, 116, 103, 114, 101, 115, 0
+83, 0, 0, 0, 20, 105, 115, 95, 115, 117, 112, 101, 114, 117, 115, 101, 114, 0, 111, 110, 0
+83, 0, 0, 0, 25, 115, 101, 114, 118, 101, 114, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0
+83, 0, 0, 0, 24, 115, 101, 114, 118, 101, 114, 95, 118, 101, 114, 115, 105, 111, 110, 0, 49, 50, 46, 52, 0
+83, 0, 0, 0, 35, 115, 101, 115, 115, 105, 111, 110, 95, 97, 117, 116, 104, 111, 114, 105, 122, 97, 116, 105, 111, 110, 0, 112, 111, 115, 116, 103, 114, 101, 115, 0
+83, 0, 0, 0, 35, 115, 116, 97, 110, 100, 97, 114, 100, 95, 99, 111, 110, 102, 111, 114, 109, 105, 110, 103, 95, 115, 116, 114, 105, 110, 103, 115, 0, 111, 110, 0
+83, 0, 0, 0, 27, 84, 105, 109, 101, 90, 111, 110, 101, 0, 65, 115, 105, 97, 47, 83, 104, 97, 110, 103, 104, 97, 105, 0
+Multi ParameterStatus {
+    "application_name": ""
+    "client_encoding": "UTF8"
+    "DateStyle": "ISO, MDY"
+    "integer_datetimes": "on"
+    "IntervalStyle": "postgres"
+    "is_superuser": "on"
+    "server_encoding": "UTF8"
+    "server_version": "12.4"
+    "session_authorization": "postgres"
+    "standard_conforming_strings": "on"
+    "TimeZone": "Asia/Shanghai"
+}
+
+75, 0, 0, 0, 12, 0, 1, 82, 152, 171, 183, 94, 73 BackendKeyData { process_id: i32, secret_key: i32 }
+90, 0, 0, 0, 5, 73 ReadyForQuery { pg_session_status: u8 }
+```
+*/
+#![allow(dead_code)]
 
 use std::io::{BufRead, Write};
 
-// 196608
-const PG_PROTOCOL_VERSION_3: i32 = 0x00_03_00_00;
 const PG_DEFAULT_PORT: u16 = 5432;
-#[allow(dead_code)]
+const PG_PROTOCOL_VERSION_3: i32 = 0x00_03_00_00; // 196608
 const AUTHENTICATION_OK: i32 = 0i32;
 
-#[allow(dead_code)]
 #[repr(u8)]
 enum MessageType {
     BackendKeyData = b'K',
@@ -20,7 +78,6 @@ enum MessageType {
     ReadyForQuery = b'Z'
 }
 
-#[allow(dead_code)]
 #[repr(u8)]
 enum PgSessionStatus {
     Idle = b'I',
@@ -51,15 +108,12 @@ impl PgRespParser {
         i32::from_be_bytes(buff)
     }
 
-    fn read_a_cstr(&mut self) -> std::ffi::CString {
+    fn read_a_cstr(&mut self) -> String {
         for nul_terminator in self.cursor..self.data.len() {
             if self.data[nul_terminator] == 0 {
-                let cstr = std::ffi::CString::from_vec_with_nul(
-                    self.data[self.cursor..=nul_terminator].to_vec(),
-                )
-                .unwrap();
+                let str = String::from_utf8(self.data[self.cursor..nul_terminator].to_owned()).unwrap();
                 self.cursor = nul_terminator + 1;
-                return cstr;
+                return str;
             }
         }
         unreachable!()
@@ -71,10 +125,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut startup_msg_body: Vec<u8> = Vec::new();
     startup_msg_body.extend(&PG_PROTOCOL_VERSION_3.to_be_bytes());
     // pg通信中字符串实际上是std::ffi::CStr类型，需要结尾有\0作为nul terminator
+    // CStr::from_bytes_with_nul(b"user\0")?.to_bytes_with_nul()
     startup_msg_body.extend(b"user\0");
-    // CStr::from_bytes_with_nul(b"postgres\0")?.to_bytes_with_nul()
     startup_msg_body.extend(b"postgres\0");
-    // terminator of startup_msg_body
+    // terminator of startup_msg_body, only startup_message has terminator and without first byte message type(historical reason)
     startup_msg_body.push(0u8);
     let body_len = startup_msg_body.len() as u32 + 4u32;
 
@@ -147,45 +201,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut query_resp = PgRespParser::new(resp);
     assert_eq!(query_resp.read_a_u8(), MessageType::RowDescription as u8);
     Ok(())
-}
-
-
-/* Response of StartupMessage
-82, 0, 0, 0, 8, 0, 0, 0, 0,
-
-83, 0, 0, 0, 22, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 95, 110, 97, 109, 101, 0, 0,
-83, 0, 0, 0, 25, 99, 108, 105, 101, 110, 116, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0,
-83, 0, 0, 0, 23, 68, 97, 116, 101, 83, 116, 121, 108, 101, 0, 73, 83, 79, 44, 32, 77, 68, 89, 0,
-83, 0, 0, 0, 25, 105, 110, 116, 101, 103, 101, 114, 95, 100, 97, 116, 101, 116, 105, 109, 101, 115, 0, 111, 110, 0,
-83, 0, 0, 0, 27, 73, 110, 116, 101, 114, 118, 97, 108, 83, 116, 121, 108, 101, 0, 112, 111, 115, 116, 103, 114, 101, 115, 0,
-83, 0, 0, 0, 20, 105, 115, 95, 115, 117, 112, 101, 114, 117, 115, 101, 114, 0, 111, 110, 0,
-83, 0, 0, 0, 25, 115, 101, 114, 118, 101, 114, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0,
-83, 0, 0, 0, 24, 115, 101, 114, 118, 101, 114, 95, 118, 101, 114, 115, 105, 111, 110, 0, 49, 50, 46, 52, 0,
-83, 0, 0, 0, 35, 115, 101, 115, 115, 105, 111, 110, 95, 97, 117, 116, 104, 111, 114, 105, 122, 97, 116, 105, 111, 110, 0, 112, 111, 115, 116, 103, 114, 101, 115, 0,
-83, 0, 0, 0, 35, 115, 116, 97, 110, 100, 97, 114, 100, 95, 99, 111, 110, 102, 111, 114, 109, 105, 110, 103, 95, 115, 116, 114, 105, 110, 103, 115, 0, 111, 110, 0,
-83, 0, 0, 0, 27, 84, 105, 109, 101, 90, 111, 110, 101, 0, 65, 115, 105, 97, 47, 83, 104, 97, 110, 103, 104, 97, 105, 0,
-
-75, 0, 0, 0, 12, 0, 1, 82, 152, 171, 183, 94, 73,
-90, 0, 0, 0, 5, 73
-
-params response:
-"application_name": ""
-"client_encoding": "UTF8"
-"DateStyle": "ISO, MDY"
-"integer_datetimes": "on"
-"IntervalStyle": "postgres"
-"is_superuser": "on"
-"server_encoding": "UTF8"
-"server_version": "12.4"
-"session_authorization": "postgres"
-"standard_conforming_strings": "on"
-"TimeZone": "Asia/Shanghai"
-*/
-#[test]
-fn test() {
-    dbg!(String::from_utf8(vec![
-        99, 108, 105, 101, 110, 116, 95, 101, 110, 99, 111, 100, 105, 110, 103
-    ])
-    .unwrap());
-    dbg!(String::from_utf8(vec![85, 84, 70, 56]).unwrap());
 }

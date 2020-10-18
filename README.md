@@ -9,7 +9,7 @@ A postgres client without any third-party dependencies/libraries.
 
 ## postgres protocol message
 
-### client startup
+### client StartupMessage
 
 ### server 
 
