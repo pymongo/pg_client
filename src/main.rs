@@ -65,8 +65,8 @@ Multi ParameterStatus {
 mod message;
 use message::{Message, MessageType};
 
-use std::io::{BufRead, Write};
 use std::convert::TryInto;
+use std::io::{BufRead, Write};
 
 const PG_DEFAULT_PORT: u16 = 5432;
 const PG_PROTOCOL_VERSION_3: i32 = 0x00_03_00_00; // 196608
@@ -76,7 +76,7 @@ const AUTHENTICATION_OK: i32 = 0i32;
 enum PgSessionStatus {
     Idle = b'I', // 73
     DoingTransaction = b'T',
-    ErrorInTransaction = b'E'
+    ErrorInTransaction = b'E',
 }
 
 struct PgRespParser {
@@ -97,16 +97,21 @@ impl PgRespParser {
     }
 
     fn read_a_i32(&mut self) -> i32 {
-        let mut buff = [0u8; 4];
-        buff.copy_from_slice(&self.data[self.cursor..self.cursor + 4]);
+        let old_cursor = self.cursor;
         self.cursor += 4;
+        let res = i32::from_be_bytes(
+            self.data.as_slice()[old_cursor..self.cursor]
+                .try_into()
+                .unwrap(),
+        );
         res
     }
 
     fn read_a_cstr(&mut self) -> String {
         for nul_terminator in self.cursor..self.data.len() {
             if self.data[nul_terminator] == 0 {
-                let str = String::from_utf8(self.data[self.cursor..nul_terminator].to_owned()).unwrap();
+                let str =
+                    String::from_utf8(self.data[self.cursor..nul_terminator].to_owned()).unwrap();
                 self.cursor = nul_terminator + 1;
                 return str;
             }
@@ -116,9 +121,9 @@ impl PgRespParser {
 
     /// assert self.cursor's next byte is a new message
     fn read_a_message(&mut self) -> Message {
-        let msg_type  = MessageType::from(self.read_a_u8());
-        let body_len = (self.read_a_i32()-4) as usize;
-        let body = self.data[self.cursor..self.cursor+body_len].to_vec();
+        let msg_type = MessageType::from(self.read_a_u8());
+        let body_len = (self.read_a_i32() - 4) as usize;
+        let body = self.data[self.cursor..self.cursor + body_len].to_vec();
         self.cursor += body_len;
         Message::new(msg_type, body)
     }
@@ -162,11 +167,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(data) => {
                 read_data = data.to_vec();
                 break;
-            },
+            }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // println!("{:?}", e);
             }
-            Err(e) => panic!("Unexpected Error: {:?}", e)
+            Err(e) => panic!("Unexpected Error: {:?}", e),
         }
     }
     let mut startup_resp = PgRespParser::new(read_data);
@@ -214,11 +219,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(data) => {
                 read_data = data.to_vec();
                 break;
-            },
+            }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 println!("{:?}", e);
             }
-            Err(e) => panic!("Unexpected Error: {:?}", e)
+            Err(e) => panic!("Unexpected Error: {:?}", e),
         }
     }
     let mut query_resp = PgRespParser::new(read_data);
@@ -233,7 +238,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     */
     let data_row_msg = query_resp.read_a_message();
     dbg!(data_row_msg);
-
 
     // CStr(83,69,76,69,67,84,32,49,0): "SELECT 1\0"
     let command_complete_msg = query_resp.read_a_message();
