@@ -66,6 +66,7 @@ mod message;
 use message::{Message, MessageType};
 
 use std::io::{BufRead, Write};
+use std::convert::TryInto;
 
 const PG_DEFAULT_PORT: u16 = 5432;
 const PG_PROTOCOL_VERSION_3: i32 = 0x00_03_00_00; // 196608
@@ -99,7 +100,7 @@ impl PgRespParser {
         let mut buff = [0u8; 4];
         buff.copy_from_slice(&self.data[self.cursor..self.cursor + 4]);
         self.cursor += 4;
-        i32::from_be_bytes(buff)
+        res
     }
 
     fn read_a_cstr(&mut self) -> String {
@@ -151,7 +152,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     */
     // let mut cursor = std::io::Cursor::new(vec![0u8; 10]);
     let mut reader = std::io::BufReader::new(&mut stream);
-    reader.get_mut().write(startup_msg.as_slice())?;
+    // Bad: reader.get_mut().write(startup_msg.as_slice())?; // written amount is not handled. Use `Write::write_all` instead
+    reader.get_mut().write_all(startup_msg.as_slice())?;
     drop(startup_msg);
     let read_data: Vec<u8>;
     // TODO wrap epoll socket data to a Future
@@ -202,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(startup_resp);
 
     let query_msg = Message::new(MessageType::SimpleQuery, b"SELECT 1::char;\0".to_vec());
-    reader.get_mut().write(&query_msg.to_vec_u8())?;
+    reader.get_mut().write_all(&query_msg.to_vec_u8())?;
     drop(query_msg);
     // let mut query_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
     let read_data: Vec<u8>;
