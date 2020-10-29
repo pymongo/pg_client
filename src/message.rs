@@ -1,5 +1,3 @@
-use std::fmt::Formatter;
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum MessageType {
@@ -58,7 +56,7 @@ impl Message {
 
 /// 不喜欢Debug竖着打印数组，那我自己实现一个打印方法
 impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{\n\ttype: {:?}({}),\n\tbody: {:?} \n}}", self.msg_type, self.msg_type as u8, self.body)
     }
 }

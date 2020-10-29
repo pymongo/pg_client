@@ -5,7 +5,9 @@
 
 例如: 83, 0, 0, 0, 25, 99, 108, 105, 101, 110, 116, 95, 101, 110, 99, 111, 100, 105, 110, 103, 0, 85, 84, 70, 56, 0
 
-表示: "client_encoding": "UTF8"
+表示: key-value pair "client_encoding": "UTF8"
+
+2. Int32指的是i32还是u32?
 
 ## Message Example
 
@@ -137,6 +139,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     startup_msg.append(&mut startup_msg_body);
 
     let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{}", PG_DEFAULT_PORT))?;
+    // Use epoll(Linux)/kqueue(BSD,mac,IOS)/IOCP(windows) async/non-blocking IO
+    // a thread that continually checks whether socket is readable, calling wake() when appropriate. However, this would be quite inefficient
+    stream.set_nonblocking(true).unwrap();
     /* TODO
     1. 怎么知道server发送的消息已经发完了?
     2. 怎么获取kernel/网卡上TCP的buffer?
@@ -148,7 +153,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = std::io::BufReader::new(&mut stream);
     reader.get_mut().write(startup_msg.as_slice())?;
     drop(startup_msg);
-    let mut startup_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
+    let read_data: Vec<u8>;
+    // TODO wrap epoll socket data to a Future
+    loop {
+        match reader.fill_buf() {
+            Ok(data) => {
+                read_data = data.to_vec();
+                break;
+            },
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // println!("{:?}", e);
+            }
+            Err(e) => panic!("Unexpected Error: {:?}", e)
+        }
+    }
+    let mut startup_resp = PgRespParser::new(read_data);
 
     let auth_msg = startup_resp.read_a_message();
     assert_eq!(auth_msg.msg_type, MessageType::Authentication);
@@ -185,8 +204,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let query_msg = Message::new(MessageType::SimpleQuery, b"SELECT 1::char;\0".to_vec());
     reader.get_mut().write(&query_msg.to_vec_u8())?;
     drop(query_msg);
-    let mut query_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
-
+    // let mut query_resp = PgRespParser::new(reader.fill_buf()?.to_vec());
+    let read_data: Vec<u8>;
+    // TODO wrap epoll socket data to a Future
+    loop {
+        match reader.fill_buf() {
+            Ok(data) => {
+                read_data = data.to_vec();
+                break;
+            },
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                println!("{:?}", e);
+            }
+            Err(e) => panic!("Unexpected Error: {:?}", e)
+        }
+    }
+    let mut query_resp = PgRespParser::new(read_data);
     let row_description_msg = query_resp.read_a_message();
     dbg!(row_description_msg);
 
